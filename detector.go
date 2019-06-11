@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"text/template"
 
 	_ "image/jpeg"
@@ -61,6 +62,8 @@ func maxUint32(numbers ...uint32) uint32 {
 
 // openImage opens and decode image from file
 func openImage(path string) *image.Image {
+	log.Printf("Open \"%s\"", path)
+
 	f, err := os.Open(path)
 	defer f.Close()
 	if err != nil {
@@ -160,6 +163,8 @@ func imagesPageHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("%s %s", (*r).Method, (*r).URL.String())
 
 	rows := bytes.NewBufferString("")
+	rowsChan := make(chan string)
+	var wg sync.WaitGroup
 
 	rect := image.Rect(0, 0, 256, 256)
 
@@ -167,18 +172,38 @@ func imagesPageHandler(w http.ResponseWriter, r *http.Request) {
 		if tmpl, err := template.New("Row").Parse(ROW_TPL); err != nil {
 			log.Fatal(err)
 		} else {
-			m := openImage(path)
-			histData := makeHistogram(m)
-			hist := plotImage(histData, &rect)
-			base := encodeToBase64(hist)
+			wg.Add(1)
 
-			data := map[string]interface{}{"imageSrc": path, "histSrc": base}
+			go func(path string) {
+				defer wg.Done()
 
-			if err = tmpl.Execute(rows, data); err != nil {
-				log.Fatal(err)
-			}
+				row := bytes.NewBufferString("")
+
+				m := openImage(path)
+				histData := makeHistogram(m)
+				hist := plotImage(histData, &rect)
+				base := encodeToBase64(hist)
+
+				data := map[string]interface{}{"imageSrc": path, "histSrc": base}
+
+				if err = tmpl.Execute(row, data); err != nil {
+					log.Fatal(err)
+				} else {
+					rowsChan <- row.String()
+				}
+			}(path)
 		}
 	}
+
+	// Collect row templates
+	go func() {
+		for row := range rowsChan {
+			rows.WriteString(row)
+		}
+	}()
+
+	// Wait for completion
+	wg.Wait()
 
 	if tmpl, err := template.New("Page").Parse(PAGE_TPL); err != nil {
 		log.Fatal(err)
