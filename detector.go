@@ -25,8 +25,34 @@ func maxUint32(numbers ...uint32) uint32 {
 	return currentMax
 }
 
-func main() {
-	resp, err := http.Get(URL)
+func makeHistogram(m *image.Image) *map[uint32]uint32 {
+	b := (*m).Bounds()
+	hist := make(map[uint32]uint32)
+	for x := b.Min.X; x < b.Max.X; x++ {
+		for y := b.Min.Y; y < b.Max.Y; y++ {
+			r, g, b, _ := (*m).At(x, y).RGBA()
+			value := (r + g + b) / 257 / 3
+			hist[value]++
+		}
+	}
+
+	return &hist
+}
+
+func plotTty(values *map[uint32]uint32) {
+	hist := *values
+
+	for level := uint32(0); level < 258; level += 3 {
+		// Average two values
+		ave := maxUint32(hist[level], hist[level+1], hist[level+2])
+
+		// Plot
+		fmt.Printf("%d %s\n", level, strings.Repeat(".", int(ave)*20/10000))
+	}
+}
+
+func parseNPlot(url string) {
+	resp, err := http.Get(url)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -46,22 +72,12 @@ func main() {
 	fmt.Printf("Size: %d x %d\n\n", h, w)
 
 	// Hist
-	b := m.Bounds()
-	hist := make(map[uint32]uint32)
-	for x := b.Min.X; x < b.Max.X; x++ {
-		for y := b.Min.Y; y < b.Max.Y; y++ {
-			r, g, b, _ := m.At(x, y).RGBA()
-			value := (r + g + b) / 257 / 3
-			hist[value]++
-		}
-	}
+	hist := *makeHistogram(&m)
 
 	// Graph
-	for level := uint32(0); level < 258; level += 3 {
-		// Average two values
-		ave := maxUint32(hist[level], hist[level+1], hist[level+2])
+	plotTty(&hist)
+}
 
-		// Plot
-		fmt.Printf("%d %s\n", level, strings.Repeat(".", int(ave)*20/10000))
-	}
+func main() {
+	parseNPlot(URL)
 }
