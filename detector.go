@@ -25,13 +25,16 @@ func maxUint32(numbers ...uint32) uint32 {
 	return currentMax
 }
 
-func makeHistogram(m *image.Image) *map[uint32]uint32 {
+func makeHistogram(m *image.Image) *[256]uint32 {
+	var hist [256]uint32
+
 	b := (*m).Bounds()
-	hist := make(map[uint32]uint32)
 	for x := b.Min.X; x < b.Max.X; x++ {
 		for y := b.Min.Y; y < b.Max.Y; y++ {
 			r, g, b, _ := (*m).At(x, y).RGBA()
+
 			value := (r + g + b) / 257 / 3
+
 			hist[value]++
 		}
 	}
@@ -39,10 +42,10 @@ func makeHistogram(m *image.Image) *map[uint32]uint32 {
 	return &hist
 }
 
-func plotTty(values *map[uint32]uint32) {
+func plotTty(values *[256]uint32) {
 	hist := *values
 
-	for level := uint32(0); level < 258; level += 3 {
+	for level := uint32(0); level < uint32(len(hist)-3); level += 3 {
 		// Average two values
 		ave := maxUint32(hist[level], hist[level+1], hist[level+2])
 
