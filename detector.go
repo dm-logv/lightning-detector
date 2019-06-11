@@ -2,13 +2,17 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
-	"html/template"
 	"image"
+	"image/color"
+	"image/png"
 	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
 	"strings"
+	"text/template"
 
 	_ "image/jpeg"
 )
@@ -38,6 +42,9 @@ const (
 			<td><img class="hist"  src="{{.histSrc}}" /></td>
 		</tr>
 	`
+
+	// BASE_TPL is an Base64 PNG image template
+	BASE_TPL = `data:image/png;base64,{{.}}`
 )
 
 // maxUint32 returns a maximum of uint32 values
@@ -50,6 +57,22 @@ func maxUint32(numbers ...uint32) uint32 {
 	}
 
 	return currentMax
+}
+
+// openImage opens and decode image from file
+func openImage(path string) *image.Image {
+	f, err := os.Open(path)
+	defer f.Close()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	m, _, err := image.Decode(f)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return &m
 }
 
 // makeHistogramm collects average brightness of pixels
@@ -83,32 +106,40 @@ func plotTty(values *[256]uint32) {
 	}
 }
 
-// parseNPlot is an experiments :)
-func parseNPlot(url string) {
-	resp, err := http.Get(url)
-	if err != nil {
+// plotImage builds graphical representation of the histogram
+func plotImage(values *[256]uint32, rect *image.Rectangle) *image.Image {
+	m := image.NewRGBA(*rect)
+
+	for x, value := range *values {
+		for y := uint32(0); y < value; y++ {
+			m.Set(int(x), (*rect).Max.Y-int(y/1000), color.Black)
+		}
+	}
+
+	var img image.Image = m
+	return &img
+}
+
+// encodeToBase64 encodes image.Image to the HTML base64 image string
+func encodeToBase64(m *image.Image) string {
+	buff := new(bytes.Buffer)
+
+	if err := png.Encode(buff, *m); err != nil {
 		log.Fatal(err)
 	}
-	defer resp.Body.Close()
 
-	m, _, err := image.Decode(resp.Body)
-	if err != nil {
+	s := base64.StdEncoding.EncodeToString(buff.Bytes())
+	base := bytes.NewBufferString("")
+
+	if tmpl, err := template.New("Base").Parse(BASE_TPL); err != nil {
 		log.Fatal(err)
+	} else {
+		if err = tmpl.Execute(base, s); err != nil {
+			log.Fatal(err)
+		}
 	}
-	g := m.Bounds()
 
-	// Get height and width
-	h := g.Dy()
-	w := g.Dx()
-
-	// Print results
-	fmt.Printf("Size: %d x %d\n\n", h, w)
-
-	// Hist
-	hist := *makeHistogram(&m)
-
-	// Graph
-	plotTty(&hist)
+	return base.String()
 }
 
 // server provieds webserver
@@ -130,11 +161,19 @@ func imagesPageHandler(w http.ResponseWriter, r *http.Request) {
 
 	rows := bytes.NewBufferString("")
 
-	for _, image := range *loadImages(".") {
+	rect := image.Rect(0, 0, 256, 256)
+
+	for _, path := range *loadImages(".") {
 		if tmpl, err := template.New("Row").Parse(ROW_TPL); err != nil {
 			log.Fatal(err)
 		} else {
-			data := map[string]interface{}{"imageSrc": image}
+			m := openImage(path)
+			histData := makeHistogram(m)
+			hist := plotImage(histData, &rect)
+			base := encodeToBase64(hist)
+
+			data := map[string]interface{}{"imageSrc": path, "histSrc": base}
+
 			if err = tmpl.Execute(rows, data); err != nil {
 				log.Fatal(err)
 			}
@@ -144,7 +183,7 @@ func imagesPageHandler(w http.ResponseWriter, r *http.Request) {
 	if tmpl, err := template.New("Page").Parse(PAGE_TPL); err != nil {
 		log.Fatal(err)
 	} else {
-		if err = tmpl.Execute(w, template.HTML(rows.String())); err != nil {
+		if err = tmpl.Execute(w, rows.String()); err != nil {
 			log.Fatal(err)
 		}
 	}
