@@ -6,16 +6,15 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	_ "image/jpeg"
 	"image/png"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
+	"path"
 	"strings"
-	"sync"
 	"text/template"
-
-	_ "image/jpeg"
 )
 
 const (
@@ -39,13 +38,18 @@ const (
 	// ROW_TPL is an HTML Table row template
 	ROW_TPL = `
 		<tr>
-			<td><img class="image" src="{{.imageSrc}}" width="500" /></td>
-			<td><img class="hist"  src="{{.histSrc}}" /></td>
+			<td><img class="image" src="/{{.imageSrc}}" width="500" /></td>
+			<td><img class="hist"  src="/hist/{{.imageSrc}}" /></td>
 		</tr>
 	`
 
 	// BASE_TPL is an Base64 PNG image template
 	BASE_TPL = `data:image/png;base64,{{.}}`
+)
+
+var (
+	// RECT is the histogram image Rect
+	RECT = image.Rect(0, 0, 256, 256)
 )
 
 // maxUint32 returns a maximum of uint32 values
@@ -147,11 +151,12 @@ func encodeToBase64(m *image.Image) string {
 
 // server provieds webserver
 func serve(host string, port int, folder string) error {
-	http.HandleFunc("/hist", imagesPageHandler)
+	http.HandleFunc("/index/", imagesPageHandler)
+	http.HandleFunc("/hist/", histPageHandler)
 	http.Handle("/", http.FileServer(http.Dir(folder)))
 
 	server := fmt.Sprintf("%s:%d", host, port)
-	log.Printf("Started at https://%s/hist\n", server)
+	log.Printf("Started at https://%s/index\n", server)
 
 	err := http.ListenAndServe(server, nil)
 
@@ -163,47 +168,18 @@ func imagesPageHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("%s %s", (*r).Method, (*r).URL.String())
 
 	rows := bytes.NewBufferString("")
-	rowsChan := make(chan string)
-	var wg sync.WaitGroup
-
-	rect := image.Rect(0, 0, 256, 256)
 
 	for _, path := range *loadImages(".") {
 		if tmpl, err := template.New("Row").Parse(ROW_TPL); err != nil {
 			log.Fatal(err)
 		} else {
-			wg.Add(1)
+			data := map[string]interface{}{"imageSrc": path}
 
-			go func(path string) {
-				defer wg.Done()
-
-				row := bytes.NewBufferString("")
-
-				m := openImage(path)
-				histData := makeHistogram(m)
-				hist := plotImage(histData, &rect)
-				base := encodeToBase64(hist)
-
-				data := map[string]interface{}{"imageSrc": path, "histSrc": base}
-
-				if err = tmpl.Execute(row, data); err != nil {
-					log.Fatal(err)
-				} else {
-					rowsChan <- row.String()
-				}
-			}(path)
+			if err = tmpl.Execute(rows, data); err != nil {
+				log.Fatal(err)
+			}
 		}
 	}
-
-	// Collect row templates
-	go func() {
-		for row := range rowsChan {
-			rows.WriteString(row)
-		}
-	}()
-
-	// Wait for completion
-	wg.Wait()
 
 	if tmpl, err := template.New("Page").Parse(PAGE_TPL); err != nil {
 		log.Fatal(err)
@@ -211,6 +187,20 @@ func imagesPageHandler(w http.ResponseWriter, r *http.Request) {
 		if err = tmpl.Execute(w, rows.String()); err != nil {
 			log.Fatal(err)
 		}
+	}
+}
+
+// histPageHandler generates histogram images
+func histPageHandler(w http.ResponseWriter, r *http.Request) {
+	log.Printf("%s:%s\n", r.RequestURI, path.Base(r.RequestURI))
+	path := path.Base(r.RequestURI)
+
+	m := openImage(path)
+	histData := makeHistogram(m)
+	hist := plotImage(histData, &RECT)
+
+	if err := png.Encode(w, *hist); err != nil {
+		log.Fatal(err)
 	}
 }
 
